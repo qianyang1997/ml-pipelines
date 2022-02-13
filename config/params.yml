@@ -1,0 +1,22 @@
+filepath:
+  raw_data:
+    directory: data/raw/
+    files:
+      file_a: # TODO
+  processed_data:
+    directory: data/processed/
+    files: # TODO
+  model_output:
+    directory: model/
+
+model:
+  xgboost:
+    n_estimators:
+    learning_rate:
+    max_depth:
+    gamma:
+    reg_alpha:
+    reg_lambda:
+    subsample:
+    min_child_weight:
+    colsample_by_tree:
