@@ -18,16 +18,17 @@ with open(_CONFIG_PATH, "r") as f:
     _CONFIG = yaml.safe_load(f)
 with open(_CREDS_PATH, "r") as f:
     _CREDS = yaml.safe_load(f)
-PATH = _CONFIG.fetch('filepath')
-PARAMS = _CONFIG.fetch('model')
+PATH = _CONFIG['filepath']
+PARAMS = _CONFIG['model']
 
 # set filepaths
 for key in PATH:
-    directory = PATH[key].fetch('directory')
-    files = PATH[key].fetch('files')
+    directory = PATH[key].get('directory', [])
+    files = PATH[key].get('files', [])
     if (not directory) and files:
         raise FileNotFoundError("Directory not specified in yaml file.")
-    for file in files:
-        PATH[key]['files'][file] = ROOT_DIR / directory / file
+    if files:
+        for file in files:
+            PATH[key]['files'][file] = ROOT_DIR / directory / file
 
 # logging

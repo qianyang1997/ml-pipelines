@@ -4,6 +4,7 @@
 **/.vscode
 **/.ipynb_checkpoints
 data
+model
 notebook
 venv
 logs

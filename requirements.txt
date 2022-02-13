@@ -1,1 +1,2 @@
+hyperopt>=0.2.5 
 xgboost>=1.5.1
