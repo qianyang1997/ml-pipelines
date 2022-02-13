@@ -17,3 +17,23 @@ def prepare_data(data: pd.DataFrame,
     # categorical variables
     
     return X, y
+
+def pipeline(X, y, X_test, y_test, **kwargs):
+    
+    obj = Validation(X, y , X_test, y_test,
+                     estimator=xgb.XGBRFRegressor,
+                     model_name='xgboost',
+                     **kwargs)
+    
+    results, best = obj.fit_cv() # specify n_iter
+    obj.save_model() # specify version or filepath
+    obj.cv_eval()
+    obj.test(scores=['mse', 'r2'])
+    
+    # or...
+    #obj.fit(custom_X, custom_y)
+    #obj.model.predict(custom_y_test)
+    
+    # or...
+    
+    

@@ -28,8 +28,6 @@ class Validation:
                  n_fold: int=3,
                  scoring: str="mse", # compatible with cross_val_score
                  cv_scoring: Union[str, List]="mse", # compatible with cross_validate
-                 load=False,
-                 filepath=None,
                  seed=0 # does not include random_state in estimator
                  ):
         self.X_train = X_train
@@ -37,24 +35,17 @@ class Validation:
         self.X_test = X_test
         self.y_test = y_test
         self.estimator = estimator
+        self.model = None
         self.model_name = model_name
         self.method = cv_method
         self.n_fold = n_fold
         self.scoring = scoring
         self.cv_scoring = cv_scoring
         self.seed = seed
-        if load:
-            self.tuning_params = None
-            self.model = self.load_model(filepath)
-        else:
-            self.initialize_params(self.model_name)
-            self.initialize_model(self.estimator)
-        
-    def initialize_model(self, estimator):
-        self.model = estimator
+        self.best_param = None
+        self.initialize_params(self.model_name)
     
     def initialize_params(self, model_name):
-            
         tuning_params = PARAMS.get(model_name, {})
         for key in tuning_params:
             if type(tuning_params[key]) != list:
@@ -97,7 +88,8 @@ class Validation:
                 if s == 'r2':
                     scorer[s] = make_scorer(r2_score)
                 if s == 'mse':
-                    scorer[s] = make_scorer(mean_squared_error, greater_is_better=False)
+                    scorer[s] = make_scorer(mean_squared_error, 
+                                            greater_is_better=False)
         else:
             scorer = list()
             for s in score:
@@ -114,9 +106,8 @@ class Validation:
             
     
     def _hyperparameter_tuning(self, params):
-
         cv = self.split(self.method, self.n_fold)
-        clf = self.model(**params)
+        clf = self.estimator(**params)
         scoring_scheme = self.metric(score=self.scoring) # TODO
         
         assert type(scoring_scheme) != dict
@@ -127,14 +118,30 @@ class Validation:
                               n_jobs=-1
                              ).mean()
         
-        return {"loss": -acc, "status": STATUS_OK, "model": clf}
+        return {"loss": -acc, "status": STATUS_OK}
     
-    def fit_cv(self, n_iter=20, refit=True, save=True, version=0, filepath=None):
-        
-        self.reset_model()
-        
+    def _update_model(self, load=False, tune=False, cv_iter=20,
+                     filepath=None, best_params={}):
+        if load:
+            self.load_model(filepath)
+        else:
+            if tune:
+                self.fit_cv(n_iter=cv_iter)
+                best_params = self.best_param
+            else:
+                if not best_params:
+                    if self.best_param is not None:
+                        best_params == self.best_param
+                    else:
+                        logging.warning("Params are empty.")
+            self.model = self.estimator(**best_params)
+            logging.info("Model updated with hyperparameters.")
+    
+    def fit_cv(self, n_iter=20):
+        """Hyperparameter tuning. Does NOT update model.
+        Updates best parameters.
+        """
         trials = Trials()
-        
         best = fmin(
             fn=self._hyperparameter_tuning,
             space=self.tuning_params,
@@ -145,36 +152,39 @@ class Validation:
         )
         
         best_parameters = space_eval(self.tuning_params, best)
+        self.best_param = best_parameters
+        logging.info("Best hyperparameters updated.")
+        
         best_result = trials.best_trial['result']
-        
-        if refit:
-            self.model = best_result['model']
-        
-        if save:
-            self.save_model(version=version, filepath=filepath)
-        
-        return trials.results, best_result['loss'], best_parameters
+        return trials.results, best_result['loss']
     
-    def fit(self, X, y, load=False, filepath=None, best_params={}):
+    def fit(self, X, y, load=False, tune=False, cv_iter=20,
+            filepath=None, best_params={}):
+        """Fit model. If hyperparameters not specified,
+        have the option to tune the model first.
+        """
+        self._update_model(load=load,
+                          tune=tune,
+                          cv_iter=cv_iter,
+                          filepath=filepath,
+                          best_params=best_params
+                          )
         
-        if load:
-            self.load_model(filepath)
-        else:
-            self.reset_model()
-            if not best_params:
-                logging.warning("Params are empty.")
-            self.model = self.model(**best_params)
         self.model.fit(X, y)
+        logging.info("Model fitted.")
         
-    def cv_eval(self, load=False, filepath=None, best_params={}):
-        
-        if load:
-            self.load_model(filepath)
-        else:
-            self.reset_model()
-            if not best_params:
-                logging.warning("Params are empty.")
-            self.model = self.model(**best_params)
+    def cv_eval(self, load=False, tune=False, cv_iter=20,
+                filepath=None, best_params={}):
+        """Generate CV evaluation table given specified hyperparameters.
+        CV folds are the same as those used in hyperparameter tuning.
+        If hyperparameters not specified, print warning message.
+        """
+        self._update_model(load=load,
+                          tune=tune,
+                          cv_iter=cv_iter,
+                          filepath=filepath,
+                          best_params=best_params
+                          )
         cv = self.split(self.method, self.n_fold)
         scoring_scheme = self.metric(score=self.cv_scoring)
         cv_score = cross_validate(self.model, self.X_train, self.y_train,
@@ -186,11 +196,13 @@ class Validation:
         cv_score = pd.DataFrame(cv_score)
         return cv_score
     
-    def test(self, scores, best_params={}, load=True, filepath=None):
-        """Retrain on whole train set, then test on hold out test set"""
+    def test(self, scores, load=False, filepath=None, best_params={}):
+        """Retrain model on whole train set with specified hyperparameters,
+        then test on holdout test set. 
+        """
         
         self.fit(self.X_train, self.y_train, load=load,
-                 filepath=filepath, best_params=best_params)
+                 tune=False, filepath=filepath, best_params=best_params)
         y_pred = self.model.predict(self.X_test)
         scoring = self.metric(scorer=False, score=scores)
         if type(scoring) == list:
@@ -202,23 +214,22 @@ class Validation:
         return result
         
     def save_model(self, version=0, filepath=None):
-        if not filepath:
-            filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
-        with open(filepath, "wb") as f:
-            pickle.dump(self.model, f)
+        """Save model with hyperparameters.
+        Model is unfitted once reloaded.
+        """
+        if self.best_param is None:
+            logging.error("No hyperparameters available for saving.")
+        else:
+            self._update_model(load=False, tune=False, best_params={})
+            if not filepath:
+                filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
+            with open(filepath, "wb") as f:
+                pickle.dump(self.model, f)
             
     def load_model(self, filepath):
+        """Load model with specified hyperparameters.
+        Loaded model is unfitted.
+        """
         with open(filepath, "rb") as f:
             self.model = pickle.load(f)
-        
-    def reset_model(self):
-        self.initialize_model(self.estimator)
-        
-        
-        
-    
-    
-        
-        
-        
-
+        logging.info("Model loaded.")
