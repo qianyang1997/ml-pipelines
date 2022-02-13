@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from typing import Union, List, Optional
-from src.modeling.validation import Validation
+from src.modeling.train_val_test import Pipeline
 
 from sklearn import datasets
 
@@ -20,15 +20,15 @@ def prepare_data(data: pd.DataFrame,
 
 def pipeline(X, y, X_test, y_test, **kwargs):
     
-    obj = Validation(X, y , X_test, y_test,
+    obj = Pipeline(X, y , X_test, y_test,
                      estimator=xgb.XGBRFRegressor,
                      model_name='xgboost',
                      **kwargs)
     
-    results, best = obj.fit_cv() # specify n_iter
-    obj.save_model() # specify version or filepath
-    obj.cv_eval()
-    obj.test(scores=['mse', 'r2'])
+    #results, best = obj.tune_cv() # specify n_iter
+    #obj.save_model() # specify version or filepath
+    #obj.cv_eval()
+    #obj.fit_test(scores=['mse', 'r2'])
     
     # or...
     #obj.fit(custom_X, custom_y)

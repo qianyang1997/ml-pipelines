@@ -1,3 +1,11 @@
+"""
+Train, validation, test pipeline.
+Methods with names starting with 'fit' will modify the model object.
+Methods with parameter 'tune' set to True will modify the best_param object.
+Method 'tune_cv' will modify the best_param object.
+
+"""
+
 import logging
 import pickle
 import numpy as np
@@ -18,7 +26,7 @@ from typing import Union, List
 from config.config import PARAMS, ROOT_DIR
 
 
-class Validation:
+class Pipeline:
     
     def __init__(self, X_train, y_train,
                  X_test, y_test,
@@ -120,24 +128,24 @@ class Validation:
         
         return {"loss": -acc, "status": STATUS_OK}
     
-    def _update_model(self, load=False, tune=False, cv_iter=20,
+    def _create_new_model(self, load=False, tune=False, cv_iter=20,
                      filepath=None, best_params={}):
         if load:
-            self.load_model(filepath)
+            model = self.load_model(filepath)
         else:
             if tune:
-                self.fit_cv(n_iter=cv_iter)
+                self.tune_cv(n_iter=cv_iter)
                 best_params = self.best_param
             else:
                 if not best_params:
                     if self.best_param is not None:
-                        best_params == self.best_param
+                        best_params = self.best_param
                     else:
                         logging.warning("Params are empty.")
-            self.model = self.estimator(**best_params)
-            logging.info("Model updated with hyperparameters.")
+        model = self.estimator(**best_params)
+        return model
     
-    def fit_cv(self, n_iter=20):
+    def tune_cv(self, n_iter=20):
         """Hyperparameter tuning. Does NOT update model.
         Updates best parameters.
         """
@@ -156,6 +164,7 @@ class Validation:
         logging.info("Best hyperparameters updated.")
         
         best_result = trials.best_trial['result']
+        logging.info(f"Best loss: {best_result['loss']}")
         return trials.results, best_result['loss']
     
     def fit(self, X, y, load=False, tune=False, cv_iter=20,
@@ -163,13 +172,14 @@ class Validation:
         """Fit model. If hyperparameters not specified,
         have the option to tune the model first.
         """
-        self._update_model(load=load,
+        model = self._create_new_model(load=load,
                           tune=tune,
                           cv_iter=cv_iter,
                           filepath=filepath,
                           best_params=best_params
                           )
-        
+        self.model = model
+        logging.info("Model reset - ready for fitting.")
         self.model.fit(X, y)
         logging.info("Model fitted.")
         
@@ -177,9 +187,9 @@ class Validation:
                 filepath=None, best_params={}):
         """Generate CV evaluation table given specified hyperparameters.
         CV folds are the same as those used in hyperparameter tuning.
-        If hyperparameters not specified, print warning message.
-        """
-        self._update_model(load=load,
+        Method does not fit model instance.
+        """  
+        model = self._create_new_model(load=load,
                           tune=tune,
                           cv_iter=cv_iter,
                           filepath=filepath,
@@ -187,7 +197,7 @@ class Validation:
                           )
         cv = self.split(self.method, self.n_fold)
         scoring_scheme = self.metric(score=self.cv_scoring)
-        cv_score = cross_validate(self.model, self.X_train, self.y_train,
+        cv_score = cross_validate(model, self.X_train, self.y_train,
                                   scoring=scoring_scheme,
                                   cv=cv,
                                   n_jobs=-1,
@@ -196,14 +206,28 @@ class Validation:
         cv_score = pd.DataFrame(cv_score)
         return cv_score
     
-    def test(self, scores, load=False, filepath=None, best_params={}):
-        """Retrain model on whole train set with specified hyperparameters,
-        then test on holdout test set. 
+    def fit_predict(self, X, y, X_for_pred, load=False,
+                    tune=False, filepath=None, best_params={}):
+        """Retrain model on X and y with specified hyperparameters,
+        then predict on X_for_pred.
         """
         
-        self.fit(self.X_train, self.y_train, load=load,
-                 tune=False, filepath=filepath, best_params=best_params)
-        y_pred = self.model.predict(self.X_test)
+        self.fit(X, y, load=load, tune=tune,
+                 filepath=filepath, best_params=best_params)
+        y_pred = self.model.predict(X_for_pred)
+        return y_pred
+    
+    def fit_test(self, scores, tune=False, load=False,
+                 filepath=None, best_params={}):
+        """Retrain model on whole train set with specified hyperparameters,
+        then test on hold-out test set. 
+        """
+        
+        y_pred = self.fit_predict(self.X_train, self.y_train,
+                                  self.X_test, load=load,
+                                  tune=tune, filepath=filepath,
+                                  best_params=best_params
+                                  )
         scoring = self.metric(scorer=False, score=scores)
         if type(scoring) == list:
             result = {scores[i]: scoring[i](y_true=self.y_test, y_pred=y_pred) 
@@ -214,22 +238,19 @@ class Validation:
         return result
         
     def save_model(self, version=0, filepath=None):
-        """Save model with hyperparameters.
-        Model is unfitted once reloaded.
-        """
+        """Save unfitted estimator with tuned hyperparameters."""
         if self.best_param is None:
             logging.error("No hyperparameters available for saving.")
         else:
-            self._update_model(load=False, tune=False, best_params={})
+            model = self.estimator(**self.best_param)
             if not filepath:
                 filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
             with open(filepath, "wb") as f:
-                pickle.dump(self.model, f)
+                pickle.dump(model, f)
             
     def load_model(self, filepath):
-        """Load model with specified hyperparameters.
-        Loaded model is unfitted.
-        """
+        """Load unfitted estimator with tuned hyperparameters."""
         with open(filepath, "rb") as f:
-            self.model = pickle.load(f)
+            model = pickle.load(f)
         logging.info("Model loaded.")
+        return model
