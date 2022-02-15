@@ -26,3 +26,4 @@ model:
     subsample: ["uniform", [0.5, 1]]
     min_child_weight: ["quniform", [0, 10, 1]]
     colsample_bytree: ["uniform", [0.5, 1]]
+    verbosity: 0

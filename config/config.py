@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 import pandas as pd
 import yaml
@@ -30,5 +29,3 @@ for key in PATH:
     if files:
         for file in files:
             PATH[key]['files'][file] = ROOT_DIR / directory / file
-
-# logging
