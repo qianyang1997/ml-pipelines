@@ -1,6 +1,8 @@
+import logging
 from pathlib import Path
 import pandas as pd
 import yaml
+
 
 # set paths
 ROOT_DIR = Path(__file__).parent.parent.absolute()
@@ -29,3 +31,22 @@ for key in PATH:
     if files:
         for file in files:
             PATH[key]['files'][file] = ROOT_DIR / directory / file
+
+# logging
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+console.setFormatter(formatter)
+
+file = logging.FileHandler(filename=ROOT_DIR / 'logs/ml_pipeline.log')
+file.setLevel(logging.DEBUG)
+
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                    datefmt='%m-%d %H:%M',
+                    handlers=[console, file]
+                    )
+
+
+
+

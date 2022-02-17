@@ -33,8 +33,8 @@ from sklearn.model_selection import (KFold,
 from typing import Union, List
 from config.config import PARAMS, ROOT_DIR
 
+
 logger = logging.getLogger(__name__)
-logger.setLevel('INFO')
 warnings.filterwarnings(action='ignore', category=UserWarning)
 
 
@@ -155,8 +155,7 @@ class Pipeline:
         if len(dic) == 1:
             return list(dic.values())[0]
         else:
-            return dic
-            
+            return dic      
     
     def _hyperparameter_tuning(self, params):
         cv = self._split(self.method, self.n_fold)
@@ -252,15 +251,17 @@ class Pipeline:
         return cv_score
     
     def fit_predict(self, X, y, X_for_pred, load=False, cv_iter=20,
-                    tune=False, filepath=None, best_params={}):
+                    prob=False, tune=False, filepath=None, best_params={}):
         """Retrain model on X and y with specified hyperparameters,
         then predict on X_for_pred.
         """
         
         self.fit(X, y, load=load, tune=tune, cv_iter=cv_iter,
                  filepath=filepath, best_params=best_params)
-        y_pred = self.model.predict(X_for_pred)
-        
+        if prob:
+            y_pred = self.model.predict_proba(X_for_pred)
+        else:
+            y_pred = self.model.predict(X_for_pred)
         return y_pred
     
     def fit_test(self, scores, tune=False, load=False, cv_iter=20,
@@ -268,9 +269,11 @@ class Pipeline:
         """Retrain model on whole train set with specified hyperparameters,
         then test on hold-out test set. 
         """
-        
+        if "log_loss" in scores:
+            prob = True
         y_pred = self.fit_predict(self.X_train, self.y_train,
-                                  self.X_test, load=load, cv_iter=cv_iter,
+                                  self.X_test, load=load, 
+                                  cv_iter=cv_iter, prob=prob,
                                   tune=tune, filepath=filepath,
                                   best_params=best_params
                                   )
@@ -299,3 +302,8 @@ class Pipeline:
             model = pickle.load(f)
         logger.info("Model loaded.")
         return model
+    
+
+if __name__ == '__main__':
+    logger.debug("check logger printed to file.")
+    logger.info("check logger printed to file and console.")
