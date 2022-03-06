@@ -1,19 +1,19 @@
 """
 Train, validation, test pipeline.
 Methods with names starting with 'fit' will modify the model object.
-Methods with parameter 'tune' set to True will modify the best_param object.
-Method 'tune_cv' will modify the best_param object.
-
+Methods with names starting with 'tune' or have parameter 'tune' set
+to True will modify the best_param object.
 """
 
 import functools
 import logging
 import pickle
-import warnings
+from typing import Union, List
 
 import numpy as np
 import pandas as pd
 from hyperopt import tpe, hp, fmin, space_eval, STATUS_OK, Trials
+from sklearn.base import BaseEstimator
 from sklearn.metrics import (mean_absolute_error,
                              mean_squared_error,
                              mean_absolute_percentage_error,
@@ -23,33 +23,38 @@ from sklearn.metrics import (mean_absolute_error,
                              precision_score,
                              recall_score,
                              accuracy_score,
-                             make_scorer
-)
+                             make_scorer,
+                             )
 from sklearn.model_selection import (KFold,
                                      StratifiedKFold,
                                      cross_validate,
-                                     cross_val_score
-) 
-from typing import Union, List
+                                     cross_val_score,
+                                     )
 from config.config import PARAMS, ROOT_DIR
 
 
 logger = logging.getLogger(__name__)
-warnings.filterwarnings(action='ignore', category=UserWarning)
 
 
 class Pipeline:
-    
-    def __init__(self, X_train, y_train,
-                 X_test, y_test,
-                 estimator, # sklearn estimator
-                 model_name: str,
+    """Pipeline to perform train-test-validation with specified estimator."""
+    def __init__(self,
+                 X_train: Union[pd.DataFrame, np.ndarray],
+                 y_train: Union[pd.DataFrame, np.ndarray],
+                 X_test: Union[pd.DataFrame, np.ndarray],
+                 y_test: Union[pd.DataFrame, np.ndarray],
+                 estimator: BaseEstimator,
+                 model_name: str='',
                  cv_method: str='kfold',
                  n_fold: int=3,
-                 scoring: str="mse", # compatible with cross_val_score
-                 cv_scoring: Union[str, List]="mse", # compatible with cross_validate
-                 seed=0 # does not include random_state in estimator
+                 scoring: str="mse",
+                 cv_scoring: Union[str, List[str]]="mse",
+                 seed=0
                  ):
+        """scoring is for cross_val_score. cv_scoring is for cross_validate.
+           seed does not encompass random_state within each estimator (which is to
+           be set in params.yml).
+        """
         self.X_train = X_train
         self.y_train = y_train
         self.X_test = X_test
@@ -64,11 +69,11 @@ class Pipeline:
         self.seed = seed
         self.best_param = None
         self._initialize_params(self.model_name)
-    
+
     def _initialize_params(self, model_name):
         tuning_params = PARAMS.get(model_name, {})
         for key in tuning_params:
-            if type(tuning_params[key]) != list:
+            if not isinstance(tuning_params[key], list):
                 pass
             elif tuning_params[key][0] == "uniform":
                 tuning_params[key] = hp.uniform(key, *tuning_params[key][1])
@@ -79,7 +84,7 @@ class Pipeline:
             elif tuning_params[key][0] == "quniform":
                 tuning_params[key] = hp.quniform(key, *tuning_params[key][1])
         self.tuning_params = tuning_params
-        
+
     def _split(self, method='kfold', n_fold=3):
         # k fold (specify n folds)
         if method == 'kfold':
@@ -91,23 +96,22 @@ class Pipeline:
             cv = StratifiedKFold(n_splits=n_fold,
                                 shuffle=True,
                                 random_state=self.seed)
-        
-        # time series
+        # time series - TODO
         elif method == 'custom':
             cv = "custom"
-        
         return cv
-    
+
     def _make_metric(self, scorer, func, **kwargs):
         if scorer:
-            return make_scorer(func, **kwargs)
+            function = make_scorer(func, **kwargs)
         else:
             kwargs.pop('greater_is_better', None)
-            return functools.partial(func, **kwargs)
-    
+            function = functools.partial(func, **kwargs)
+        return function
+
     def _metric(self, scorer=True, score='mse'):
         # returns callable, list/dict of callables
-        
+
         all_metrics = [
             'mse', 'r2', 'mae', 'mape', 'rmse',
             'f1_binary', 'f1_micro', 'f1_macro',
@@ -115,13 +119,13 @@ class Pipeline:
             'recall_binary', 'recall_micro', 'recall_macro',
             'accuracy', 'log_loss'
         ]
-        
-        if type(score) == str:
+
+        if isinstance(score, str):
             score = [score]
-        
+
         assert len(set(score)) == len(set(score).intersection(set(all_metrics)))
-        
-        dic = dict()
+
+        dic = {}
         for s in score:
             if s == 'r2':
                 dic[s] = self._make_metric(scorer=scorer, func=r2_score)
@@ -138,7 +142,7 @@ class Pipeline:
                 dic[s] = self._make_metric(scorer=scorer, func=mean_absolute_percentage_error,
                                            greater_is_better=False)
             elif s.startswith('f1'):
-                dic[s] = self._make_metric(scorer=scorer, func=f1_score, 
+                dic[s] = self._make_metric(scorer=scorer, func=f1_score,
                                            average=s[3:])
             elif s.startswith('precision'):
                 dic[s] = self._make_metric(scorer=scorer, func=precision_score,
@@ -149,31 +153,40 @@ class Pipeline:
             elif s == 'accuracy':
                 dic[s] = self._make_metric(scorer=scorer, func=accuracy_score)
             elif s == 'log_loss':
-                dic[s] = self._make_metric(scorer=scorer, func=log_loss, 
+                dic[s] = self._make_metric(scorer=scorer, func=log_loss,
                                            greater_is_better=False)
 
         if len(dic) == 1:
-            return list(dic.values())[0]
+            met = list(dic.values())[0]
         else:
-            return dic      
-    
+            met = dic
+
+        return met
+
     def _hyperparameter_tuning(self, params):
         cv = self._split(self.method, self.n_fold)
         clf = self.estimator(**params)
         scoring_scheme = self._metric(scorer=True, score=self.scoring)
-        
-        assert type(scoring_scheme) != dict
-        
-        acc = cross_val_score(clf, self.X_train, self.y_train, # TODO
+
+        assert not isinstance(scoring_scheme, dict)
+
+        acc = cross_val_score(clf,
+                              self.X_train,
+                              self.y_train,
                               scoring=scoring_scheme,
                               cv=cv,
                               n_jobs=-1
                              ).mean()
-        
+
         return {"loss": -acc, "status": STATUS_OK}
-    
-    def _create_new_model(self, load=False, tune=False, cv_iter=20,
-                     filepath=None, best_params={}):
+
+    def _create_new_model(self,
+                          load=False,
+                          tune=False,
+                          cv_iter=20,
+                          filepath=None,
+                          best_params={}
+                          ):
         if load:
             model = self.load_model(filepath)
         else:
@@ -188,7 +201,7 @@ class Pipeline:
                         logger.warning("Params are empty.")
         model = self.estimator(**best_params)
         return model
-    
+
     def tune_cv(self, n_iter=20):
         """Hyperparameter tuning. Does NOT update model.
         Updates best parameters.
@@ -197,20 +210,20 @@ class Pipeline:
         best = fmin(
             fn=self._hyperparameter_tuning,
             space=self.tuning_params,
-            algo=tpe.suggest, 
-            max_evals=n_iter, 
+            algo=tpe.suggest,
+            max_evals=n_iter,
             trials=trials,
             rstate=np.random.RandomState(self.seed)
         )
-        
+
         best_parameters = space_eval(self.tuning_params, best)
         self.best_param = best_parameters
         logger.info("Best hyperparameters updated.")
-        
+
         best_result = trials.best_trial['result']
         logger.info(f"Best loss: {best_result['loss']}")
         return trials.results, best_result['loss']
-    
+
     def fit(self, X, y, load=False, tune=False, cv_iter=20,
             filepath=None, best_params={}):
         """Fit model. If hyperparameters not specified,
@@ -226,13 +239,13 @@ class Pipeline:
         logger.info("Model reset - ready for fitting.")
         self.model.fit(X, y)
         logger.info("Model fitted.")
-        
+
     def cv_eval(self, load=False, tune=False, cv_iter=20,
                 filepath=None, best_params={}):
         """Generate CV evaluation table given specified hyperparameters.
         CV folds are the same as those used in hyperparameter tuning.
         Method does not fit model instance.
-        """  
+        """
         model = self._create_new_model(load=load,
                           tune=tune,
                           cv_iter=cv_iter,
@@ -249,13 +262,13 @@ class Pipeline:
                                   )
         cv_score = pd.DataFrame(cv_score)
         return cv_score
-    
+
     def fit_predict(self, X, y, X_for_pred, load=False, cv_iter=20,
                     prob=False, tune=False, filepath=None, best_params={}):
         """Retrain model on X and y with specified hyperparameters,
         then predict on X_for_pred.
         """
-        
+
         self.fit(X, y, load=load, tune=tune, cv_iter=cv_iter,
                  filepath=filepath, best_params=best_params)
         if prob:
@@ -263,28 +276,28 @@ class Pipeline:
         else:
             y_pred = self.model.predict(X_for_pred)
         return y_pred
-    
+
     def fit_test(self, scores, tune=False, load=False, cv_iter=20,
                  filepath=None, best_params={}):
         """Retrain model on whole train set with specified hyperparameters,
-        then test on hold-out test set. 
+        then test on hold-out test set.
         """
-        if "log_loss" in scores:
-            prob = True
+        prob = bool("log_loss" in scores)
+
         y_pred = self.fit_predict(self.X_train, self.y_train,
-                                  self.X_test, load=load, 
+                                  self.X_test, load=load,
                                   cv_iter=cv_iter, prob=prob,
                                   tune=tune, filepath=filepath,
                                   best_params=best_params
                                   )
         scoring = self._metric(scorer=False, score=scores)
-        if type(scoring) == dict:
+        if isinstance(scoring, dict):
             result = {k: v(self.y_test, y_pred) for k, v in scoring.items()}
         else:
             result = {scores: scoring(self.y_test, y_pred)}
 
         return result, y_pred
-        
+
     def save_model(self, version=0, filepath=None):
         """Save unfitted estimator with tuned hyperparameters."""
         if self.best_param is None:
@@ -295,15 +308,16 @@ class Pipeline:
                 filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
             with open(filepath, "wb") as f:
                 pickle.dump(model, f)
-            
+
     def load_model(self, filepath):
         """Load unfitted estimator with tuned hyperparameters."""
         with open(filepath, "rb") as f:
             model = pickle.load(f)
         logger.info("Model loaded.")
         return model
-    
+
 
 if __name__ == '__main__':
+
     logger.debug("check logger printed to file.")
     logger.info("check logger printed to file and console.")

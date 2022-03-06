@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 import pandas as pd
 import yaml
@@ -46,6 +47,9 @@ logging.basicConfig(level=logging.DEBUG,
                     datefmt='%m-%d %H:%M',
                     handlers=[console, file]
                     )
+
+# warnings
+warnings.filterwarnings(action='ignore', category=UserWarning)
 
 
 
