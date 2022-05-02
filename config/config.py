@@ -21,7 +21,8 @@ with open(_CONFIG_PATH, "r") as f:
 with open(_CREDS_PATH, "r") as f:
     _CREDS = yaml.safe_load(f)
 PATH = _CONFIG['filepath']
-PARAMS = _CONFIG['model']
+MODEL_PARAMS = _CONFIG['model']
+VAL_PARAMS = _CONFIG['validation']
 
 # set filepaths
 for key in PATH:

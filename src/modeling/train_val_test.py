@@ -4,8 +4,7 @@ Methods with names starting with 'fit' will modify the model object.
 Methods with names starting with 'tune' or have parameter 'tune' set
 to True will modify the best_param object.
 """
-
-import functools
+from functools import partial
 import logging
 import pickle
 from typing import Union, List
@@ -13,24 +12,13 @@ from typing import Union, List
 import numpy as np
 import pandas as pd
 from hyperopt import tpe, hp, fmin, space_eval, STATUS_OK, Trials
-from sklearn.base import BaseEstimator
-from sklearn.metrics import (mean_absolute_error,
-                             mean_squared_error,
-                             mean_absolute_percentage_error,
-                             r2_score,
-                             log_loss,
-                             f1_score,
-                             precision_score,
-                             recall_score,
-                             accuracy_score,
-                             make_scorer,
-                             )
 from sklearn.model_selection import (KFold,
                                      StratifiedKFold,
                                      cross_validate,
                                      cross_val_score,
                                      )
-from config.config import PARAMS, ROOT_DIR
+from sklearn.utils.validation import check_is_fitted
+from config.config import MODEL_PARAMS, VAL_PARAMS, ROOT_DIR
 
 
 logger = logging.getLogger(__name__)
@@ -38,40 +26,13 @@ logger = logging.getLogger(__name__)
 
 class Pipeline:
     """Pipeline to perform train-test-validation with specified estimator."""
-    def __init__(self,
-                 X_train: Union[pd.DataFrame, np.ndarray],
-                 y_train: Union[pd.DataFrame, np.ndarray],
-                 X_test: Union[pd.DataFrame, np.ndarray],
-                 y_test: Union[pd.DataFrame, np.ndarray],
-                 estimator: BaseEstimator,
-                 model_name: str='',
-                 cv_method: str='kfold',
-                 n_fold: int=3,
-                 scoring: str="mse",
-                 cv_scoring: Union[str, List[str]]="mse",
-                 seed=0
-                 ):
-        """scoring is for cross_val_score. cv_scoring is for cross_validate.
-           seed does not encompass random_state within each estimator (which is to
-           be set in params.yml).
-        """
-        self.X_train = X_train
-        self.y_train = y_train
-        self.X_test = X_test
-        self.y_test = y_test
+    def __init__(self, estimator, model_name: str='xgboost'):
         self.estimator = estimator
-        self.model = None
+        self.model = self.estimator()
         self.model_name = model_name
-        self.method = cv_method
-        self.n_fold = n_fold
-        self.scoring = scoring
-        self.cv_scoring = cv_scoring
-        self.seed = seed
-        self.best_param = None
-        self._initialize_params(self.model_name)
 
-    def _initialize_params(self, model_name):
-        tuning_params = PARAMS.get(model_name, {})
+    def _initialize_params(self):
+        tuning_params = MODEL_PARAMS.get(self.model_name, {})
         for key in tuning_params:
             if not isinstance(tuning_params[key], list):
                 pass
@@ -83,8 +44,9 @@ class Pipeline:
                 tuning_params[key] = hp.choice(key, np.arange(*tuning_params[key][1], dtype=float))
             elif tuning_params[key][0] == "quniform":
                 tuning_params[key] = hp.quniform(key, *tuning_params[key][1])
-        self.tuning_params = tuning_params
+        return tuning_params
 
+    # TODO - make more flexible
     def _split(self, method='kfold', n_fold=3):
         # k fold (specify n folds)
         if method == 'kfold':
@@ -101,144 +63,46 @@ class Pipeline:
             cv = "custom"
         return cv
 
-    def _make_metric(self, scorer, func, **kwargs):
-        if scorer:
-            function = make_scorer(func, **kwargs)
-        else:
-            kwargs.pop('greater_is_better', None)
-            function = functools.partial(func, **kwargs)
-        return function
-
-    def _metric(self, scorer=True, score='mse'):
-        # returns callable, list/dict of callables
-
-        all_metrics = [
-            'mse', 'r2', 'mae', 'mape', 'rmse',
-            'f1_binary', 'f1_micro', 'f1_macro',
-            'precision_binary', 'precision_micro', 'precision_macro',
-            'recall_binary', 'recall_micro', 'recall_macro',
-            'accuracy', 'log_loss'
-        ]
-
-        if isinstance(score, str):
-            score = [score]
-
-        assert len(set(score)) == len(set(score).intersection(set(all_metrics)))
-
-        dic = {}
-        for s in score:
-            if s == 'r2':
-                dic[s] = self._make_metric(scorer=scorer, func=r2_score)
-            elif s == 'mse':
-                dic[s] = self._make_metric(scorer=scorer, func=mean_squared_error,
-                                           greater_is_better=False)
-            elif s == 'mae':
-                dic[s] = self._make_metric(scorer=scorer, func=mean_absolute_error,
-                                           greater_is_better=False)
-            elif s == 'rmse':
-                dic[s] = self._make_metric(scorer=scorer, func=mean_squared_error,
-                                           greater_is_better=False, squared=False)
-            elif s == 'mape':
-                dic[s] = self._make_metric(scorer=scorer, func=mean_absolute_percentage_error,
-                                           greater_is_better=False)
-            elif s.startswith('f1'):
-                dic[s] = self._make_metric(scorer=scorer, func=f1_score,
-                                           average=s[3:])
-            elif s.startswith('precision'):
-                dic[s] = self._make_metric(scorer=scorer, func=precision_score,
-                                           average=s[len('precision') + 1:])
-            elif s.startswith('recall'):
-                dic[s] = self._make_metric(scorer=scorer, func=recall_score,
-                                           average=s[len('recall') + 1:])
-            elif s == 'accuracy':
-                dic[s] = self._make_metric(scorer=scorer, func=accuracy_score)
-            elif s == 'log_loss':
-                dic[s] = self._make_metric(scorer=scorer, func=log_loss,
-                                           greater_is_better=False)
-
-        if len(dic) == 1:
-            met = list(dic.values())[0]
-        else:
-            met = dic
-
-        return met
-
-    def _hyperparameter_tuning(self, params):
-        cv = self._split(self.method, self.n_fold)
+    def _hyperparameter_tuning(self, X_train, y_train, score_scheme, params):
+        cv = self._split(self.method, self.n_fold) # TODO
         clf = self.estimator(**params)
-        scoring_scheme = self._metric(scorer=True, score=self.scoring)
-
-        assert not isinstance(scoring_scheme, dict)
 
         acc = cross_val_score(clf,
-                              self.X_train,
-                              self.y_train,
-                              scoring=scoring_scheme,
+                              X_train,
+                              y_train,
+                              scoring=score_scheme,
                               cv=cv,
                               n_jobs=-1
                              ).mean()
 
         return {"loss": -acc, "status": STATUS_OK}
 
-    def _create_new_model(self,
-                          load=False,
-                          tune=False,
-                          cv_iter=20,
-                          filepath=None,
-                          best_params={}
-                          ):
-        if load:
-            model = self.load_model(filepath)
-        else:
-            if tune:
-                self.tune_cv(n_iter=cv_iter)
-                best_params = self.best_param
-            else:
-                if not best_params:
-                    if self.best_param is not None:
-                        best_params = self.best_param
-                    else:
-                        logger.warning("Params are empty.")
-        model = self.estimator(**best_params)
-        return model
-
-    def tune_cv(self, n_iter=20):
-        """Hyperparameter tuning. Does NOT update model.
-        Updates best parameters.
-        """
+    def tune_cv(self, X_train, y_train):
+        """Hyperparameter tuning. Returns best result and tuning params."""
+        
+        cv_params = VAL_PARAMS['cv_params']
+        
         trials = Trials()
+        
+        func = partial(self._hyperparameter_tuning,
+                       X_train, y_train,
+                       cv_params['evaluation'])
+        tuning_params = self._initialize_params(self.model_name)
+        
         best = fmin(
-            fn=self._hyperparameter_tuning,
-            space=self.tuning_params,
+            fn=func,
+            space=tuning_params,
             algo=tpe.suggest,
-            max_evals=n_iter,
+            max_evals=cv_params['n_iter'],
             trials=trials,
-            rstate=np.random.RandomState(self.seed)
+            rstate=np.random.default_rng(cv_params['random_state'])
         )
 
-        best_parameters = space_eval(self.tuning_params, best)
-        self.best_param = best_parameters
-        logger.info("Best hyperparameters updated.")
-
+        best_parameters = space_eval(tuning_params, best)
         best_result = trials.best_trial['result']
         logger.info(f"Best loss: {best_result['loss']}")
-        return trials.results, best_result['loss']
-
-    def fit(self, X, y, load=False, tune=False, cv_iter=20,
-            filepath=None, best_params={}):
-        """Fit model. If hyperparameters not specified,
-        have the option to tune the model first.
-        """
-        model = self._create_new_model(load=load,
-                          tune=tune,
-                          cv_iter=cv_iter,
-                          filepath=filepath,
-                          best_params=best_params
-                          )
-        self.model = model
-        logger.info("Model reset - ready for fitting.")
-        self.model.fit(X, y)
-        logger.info("Model fitted.")
+        
+        return trials.results, best_result['loss'], best_parameters
 
     def cv_eval(self, load=False, tune=False, cv_iter=20,
                 filepath=None, best_params={}):
@@ -262,59 +126,42 @@ class Pipeline:
                                   )
         cv_score = pd.DataFrame(cv_score)
         return cv_score
-
-    def fit_predict(self, X, y, X_for_pred, load=False, cv_iter=20,
-                    prob=False, tune=False, filepath=None, best_params={}):
-        """Retrain model on X and y with specified hyperparameters,
-        then predict on X_for_pred.
-        """
-
-        self.fit(X, y, load=load, tune=tune, cv_iter=cv_iter,
-                 filepath=filepath, best_params=best_params)
-        if prob:
-            y_pred = self.model.predict_proba(X_for_pred)
+    
+    def main(self, data,
+             load_version=None, load_filepath=None,
+             save_version=None, save_filepath=None):
+        
+        # TODO - train test split
+        X_train, y_train, X_test, y_test = data
+        
+        if load_filepath or load_version:
+            self.model = self.load_model(version=load_version, filepath=load_filepath)
+            check_is_fitted(self.model)
         else:
-            y_pred = self.model.predict(X_for_pred)
-        return y_pred
+            _, best_result, best_params = self.tune_cv(X_train, y_train)
+            self.model = self.estimator(**best_params).fit(X_train)
 
-    def fit_test(self, scores, tune=False, load=False, cv_iter=20,
-                 filepath=None, best_params={}):
-        """Retrain model on whole train set with specified hyperparameters,
-        then test on hold-out test set.
-        """
-        prob = bool("log_loss" in scores)
-
-        y_pred = self.fit_predict(self.X_train, self.y_train,
-                                  self.X_test, load=load,
-                                  cv_iter=cv_iter, prob=prob,
-                                  tune=tune, filepath=filepath,
-                                  best_params=best_params
-                                  )
-        scoring = self._metric(scorer=False, score=scores)
-        if isinstance(scoring, dict):
-            result = {k: v(self.y_test, y_pred) for k, v in scoring.items()}
-        else:
-            result = {scores: scoring(self.y_test, y_pred)}
-
-        return result, y_pred
+        if save_filepath or save_version:
+            self.save_model(version=save_version, filepath=save_filepath)
+        
+        # TODO - evaluate performance on train set and test set
+        
 
     def save_model(self, version=0, filepath=None):
         """Save unfitted estimator with tuned hyperparameters."""
-        if self.best_param is None:
-            logger.error("No hyperparameters available for saving.")
-        else:
-            model = self.estimator(**self.best_param)
-            if not filepath:
-                filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
-            with open(filepath, "wb") as f:
-                pickle.dump(model, f)
+        check_is_fitted(self.model)
+        if not filepath:
+            filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
+        with open(filepath, "wb") as f:
+            pickle.dump(self.model, f)
 
-    def load_model(self, filepath):
-        """Load unfitted estimator with tuned hyperparameters."""
+    def load_model(self, version=0, filepath=None):
+        """Load saved estimator."""
+        if not filepath:
+            filepath = ROOT_DIR / f'model/{self.model_name}_v{version}.pkl'
         with open(filepath, "rb") as f:
-            model = pickle.load(f)
+            self.model = pickle.load(f)
         logger.info("Model loaded.")
-        return model
 
 
 if __name__ == '__main__':
