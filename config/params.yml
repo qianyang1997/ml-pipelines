@@ -30,11 +30,14 @@ model:
 
 validation:
   split_params:
-    test_threshold: 0.2
+    test_size: 0.2
     random_state: 1234
   cv_params:
     n_iter: 20
     n_folds: 3
     evaluation: mse
-    random_state: 1234
-  eval_scheme: mse
+    kfold_random_state: 1234
+    tuning_random_state: 1234
+  eval_params:
+    average: macro
+    multi_class: ovo
