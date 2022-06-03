@@ -3,7 +3,8 @@ from sklearn.utils.validation import check_is_fitted
 
 from src.modeling.modeling import Modeling
 from config.config import VAL_PARAMS
-from utils.shap import create_shap_table
+#from utils.shap import create_shap_table
+
 
 class Evaluation(Modeling):
     

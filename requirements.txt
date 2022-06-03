@@ -1,3 +1,4 @@
 pandas>=1.4.0
+plotly>=5.5.0
 hyperopt>=0.2.5 
 xgboost>=1.5.1

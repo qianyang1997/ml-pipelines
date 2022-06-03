@@ -1,14 +1,13 @@
 import pandas as pd
 import shap
 
-def create_shap_table(model, X, num_features_to_show: int=50):
+def tree_model_shap_table(model, X, num_features_to_show: int=50):
     """Find average SHAP value for each feature.
 
     Args:
         model (_type_): _description_
         X (pd.DataFrame): dataframe used to train the model, containing column names
     """
-    shap.initjs()
     shap_explainer = shap.TreeExplainer(model)
     
     # Obtain shap values for each observation for each feature
