@@ -69,4 +69,3 @@ def beautify_table(df: pd.DataFrame, title: str, subtitle: str=''):
     plotly_table.update_layout(height=400)
     
     return plotly_table.to_json()
-        
