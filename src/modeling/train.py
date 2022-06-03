@@ -9,8 +9,9 @@ import pandas as pd
 from hyperopt import tpe, hp, fmin, space_eval, STATUS_OK, Trials
 from hyperopt.early_stop import no_progress_loss
 from sklearn.model_selection import KFold, StratifiedKFold, cross_validate, cross_val_score
+from xgboost import XGBRegressor
 
-from config.config import MODEL_PARAMS, VAL_PARAMS
+from config.config import MODEL_PARAMS, VAL_PARAMS, PATH
 from src.modeling.modeling import Modeling
 
 
@@ -77,7 +78,7 @@ class Train(Modeling):
         func = partial(self._hyperparameter_tuning,
                        X_train, y_train,
                        cv_params['evaluation'])
-        tuning_params = self._initialize_params(self.model_name)
+        tuning_params = self._initialize_params()
         
         best = fmin(
             fn=func,
@@ -85,7 +86,7 @@ class Train(Modeling):
             algo=tpe.suggest,
             max_evals=cv_params['n_iter'],
             trials=trials,
-            early_stop_fn=no_progress_loss,
+            #early_stop_fn=no_progress_loss, # TODO - figure out what's wrong
             rstate=np.random.default_rng(cv_params['tuning_random_state'])
         )
 
@@ -122,7 +123,7 @@ class Train(Modeling):
              save_version=None, save_filepath=None):
         
         _, best_result, best_params = self.tune_cv(X_train, y_train)
-        self.model = self.estimator(**best_params).fit(X_train)
+        self.model = self.estimator(**best_params).fit(X_train, y_train)
 
         if save_filepath or save_version:
             self.save_model(version=save_version, filepath=save_filepath)
@@ -134,3 +135,18 @@ if __name__ == '__main__':
 
     logger.debug("check logger printed to file.")
     logger.info("check logger printed to file and console.")
+    
+    from xgboost import XGBClassifier
+    
+    # test pipeline with iris data
+    data = pd.read_csv(PATH['raw_data']['files']['iris'])
+    X = data.iloc[:, :-1]
+    y = data.iloc[:, -1]
+    
+    # classification
+    pip = Train(XGBClassifier, 'xgboost', 'classification')
+    pip.main(X, y, save_version=0)
+    
+    # regression
+    pip = Train(XGBRegressor, 'xgboost', 'regression')
+    pip.main(X, y, save_version=1)

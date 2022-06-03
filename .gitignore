@@ -3,7 +3,7 @@
 **/.DS_Store
 **/.vscode
 **/.ipynb_checkpoints
-data
+data/*
 model
 notebook
 venv

@@ -2,7 +2,7 @@ filepath:
   raw_data:
     directory: data/raw/
     files:
-      file_a: # TODO
+      iris: iris.csv
   processed_data:
     directory: data/processed/
     files: # TODO
@@ -27,6 +27,7 @@ model:
     min_child_weight: ["quniform", [0, 10, 1]]
     colsample_bytree: ["uniform", [0.5, 1]]
     verbosity: 0
+    use_label_encoder: False
 
 validation:
   split_params:
@@ -35,9 +36,9 @@ validation:
   cv_params:
     n_iter: 20
     n_folds: 3
-    evaluation: mse
+    evaluation: neg_mean_squared_error # see https://scikit-learn.org/stable/modules/model_evaluation.html#scoring-parameter
     kfold_random_state: 1234
     tuning_random_state: 1234
-  eval_params:
+  eval_params: # TODO
     average: macro
     multi_class: ovo

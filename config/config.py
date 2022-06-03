@@ -32,7 +32,7 @@ for key in PATH:
         raise FileNotFoundError("Directory not specified in yaml file.")
     if files:
         for file in files:
-            PATH[key]['files'][file] = ROOT_DIR / directory / file
+            PATH[key]['files'][file] = ROOT_DIR / directory / files[file]
 
 # logging
 console = logging.StreamHandler()
